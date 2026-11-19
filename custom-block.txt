@@ -11,3 +11,19 @@
 ! Examples (uncomment or add lines below):
 ! ||known-phish.example.com^
 ! ||unwanted-telemetry.example.net^
+! Malicious C2 IP contacted by Front5 for the rogue ScreenConnect relay
+||45.14.194.204^
+! Malicious C2 IP contacted by Front5 for the rogue SimpleHelp backup agent
+||109.123.251.43^
+! Outbound destination on port 443 triggered by powershell.exe and blocked by Malwarebytes
+||109.199.103.66^
+! Root web host IP serving the attacker's secondary domain
+||145.79.6.34^
+! Malicious C2 subdomain queried by Front5 for the rogue ScreenConnect client
+||matrix.opanam.online^
+! Parent domain for the rogue ScreenConnect server to block any new subdomains
+||opanam.online^
+! Malicious C2 subdomain queried by Front5 for the rogue SimpleHelp client
+||simple.opanam.org^
+! Parent domain for the rogue SimpleHelp server to block any new subdomains
+||opanam.org^
