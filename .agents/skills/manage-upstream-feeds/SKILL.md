@@ -2,10 +2,10 @@
 name: manage-upstream-feeds
 description: >-
   Add, remove, update, or verify upstream public DNS blocklist feeds in
-  configuration.json for the DFS Unified AdGuard Home blocklist. Use when the
-  user wants to include a new public blocklist, remove an existing feed, swap
-  feed tiers (e.g., HaGeZi Pro vs Normal, TIF Mini vs Medium), or troubleshoot a
-  failing upstream source.
+  configuration.json for the DFS Unified Blocklist (AdGuard Home & UniFi UDM/UCG).
+  Use when the user wants to include a new public blocklist, remove an existing
+  feed, swap feed tiers (e.g., HaGeZi Pro vs Normal, TIF Mini vs Medium), or
+  troubleshoot a failing upstream source.
 ---
 
 # Manage Upstream Public Feeds
@@ -58,6 +58,6 @@ git push
 Wait ~45–90 seconds and verify the GitHub Actions run succeeds:
 
 ```powershell
-$runs = Invoke-RestMethod "https://api.github.com/repos/houseofbugs/adguard-unified-blocklist/actions/runs?per_page=1"
+$runs = Invoke-RestMethod "https://api.github.com/repos/houseofbugs/dfs-blocklist/actions/runs?per_page=1"
 $runs.workflow_runs[0] | Select-Object status, conclusion, updated_at, html_url
 ```

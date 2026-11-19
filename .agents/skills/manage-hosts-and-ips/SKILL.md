@@ -2,22 +2,22 @@
 name: manage-hosts-and-ips
 description: >-
   Add, remove, change, block, allow (whitelist), or rewrite (map host to IP via
-  $dnsrewrite) hosts, domains, and IP addresses in the DFS Unified AdGuard Home
-  blocklist, or check whether a host/IP is currently blocked. Use whenever the
-  user asks to block, unblock, allow, whitelist, add, remove, or change an IP or
-  hostname for their AdGuard Home deployments.
+  $dnsrewrite) hosts, domains, and IP addresses in the DFS Unified Blocklist
+  (AdGuard Home and UniFi UDM/UCG), or check whether a host/IP is currently blocked.
+  Use whenever the user asks to block, unblock, allow, whitelist, add, remove, or
+  change an IP or hostname for their AdGuard Home or UDM/UCG deployments.
 ---
 
 # Manage Hosts, IPs, and DNS Rewrites
 
-Use this skill to manage custom host rules, IP blocks, global allowlists (false-positive overrides), and host-to-IP DNS rewrites (`$dnsrewrite`) across all AdGuard Home deployments backed by this repository.
+Use this skill to manage custom host rules, IP/CIDR blocks, global allowlists (false-positive overrides), and host-to-IP DNS rewrites (`$dnsrewrite`) across both **AdGuard Home** (`blocklist.txt`) and **UniFi UDM/UCG** (`udm-domains.txt`, `udm-ips.txt`) outputs backed by this repository.
 
-All rule changes go into version-controlled files at the repository root and are automatically compiled into `blocklist.txt` on the `dist` branch by GitHub Actions:
+All rule changes go into version-controlled files at the repository root and are automatically compiled into the `dist` branch by GitHub Actions:
 
-- [`custom-block.txt`](../../../../custom-block.txt) — Block additional domains or IP addresses (`||target^`)
-- [`custom-allow.txt`](../../../../custom-allow.txt) — Force-allow domains globally (`@@||target^$important`)
-- [`custom-rewrites.txt`](../../../../custom-rewrites.txt) — Map or change a host's resolved IP (`||host^$dnsrewrite=IP`)
-- [`exclusions.txt`](../../../../exclusions.txt) — Strip matching rules from upstream feeds during compilation
+- [`custom-block.txt`](../../../../custom-block.txt) — Block additional domains or IP/CIDR addresses (`||target^`, propagated to both `blocklist.txt` and `udm-domains.txt`/`udm-ips.txt`)
+- [`custom-allow.txt`](../../../../custom-allow.txt) — Force-allow domains/IPs globally (`@@||target^$important`)
+- [`custom-rewrites.txt`](../../../../custom-rewrites.txt) — Map or change a host's resolved IP in AdGuard Home (`||host^$dnsrewrite=IP`)
+- [`exclusions.txt`](../../../../exclusions.txt) — Strip matching rules from upstream feeds during compilation (both AdGuard and UDM lists)
 
 For syntax details and advanced modifiers (`$client`, `$dnstype`, IPv6, CIDR, regex), read [adguard-dns-syntax.md](./references/adguard-dns-syntax.md).
 
@@ -73,7 +73,7 @@ List all active custom rules across all four files:
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".agents\skills\manage-hosts-and-ips\scripts\manage-rules.ps1" -Action list
 ```
 
-Check whether a host/IP (or its parent domains) appears locally or in the live compiled `dist/blocklist.txt`:
+Check whether a host/IP (or its parent domains) appears locally or in the live compiled `dist` lists (`blocklist.txt`, `udm-domains.txt`, `udm-ips.txt`):
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".agents\skills\manage-hosts-and-ips\scripts\manage-rules.ps1" -Action check -Target "sub.example.com" -CheckLive
@@ -83,9 +83,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".agents\skills\manage-h
 
 1. Pass `-Push` to `manage-rules.ps1` (or run `git add custom-*.txt exclusions.txt && git commit -m "..." && git push`) to push to `origin/main`.
 2. Pushing to `main` triggers `.github/workflows/compile.yml` (~45–90 seconds).
-3. Verify the latest workflow run succeeded and the live file updated:
+3. Verify the latest workflow run succeeded and the live files updated:
    ```powershell
-   $runs = Invoke-RestMethod "https://api.github.com/repos/houseofbugs/adguard-unified-blocklist/actions/runs?per_page=1"
+   $runs = Invoke-RestMethod "https://api.github.com/repos/houseofbugs/dfs-blocklist/actions/runs?per_page=1"
    $runs.workflow_runs[0] | Select-Object status, conclusion, updated_at, html_url
    ```
-4. Once `conclusion` is `success`, remind the user that AdGuard Home installs auto-update on schedule (or they can click **Check for updates** in AdGuard Home **Filters -> DNS blocklists** for immediate sync).
+4. Once `conclusion` is `success`, remind the user that AdGuard Home and UniFi UDM/UCG External Lists auto-update on schedule (or they can trigger a manual update from their dashboard).

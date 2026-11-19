@@ -37,8 +37,10 @@ function Normalize-Target {
     $clean = $clean -replace '^@@', ''
     $clean = $clean -replace '^\|\|', ''
     $clean = $clean -replace '^https?://', ''
-    $clean = $clean -replace '/.*$', ''
     $clean = $clean -replace '\^.*$', ''
+    if ($clean -notmatch '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$' -and $clean -notmatch '^[0-9a-fA-F:]+/\d{1,3}$') {
+        $clean = $clean -replace '/.*$', ''
+    }
     return $clean.Trim().ToLowerInvariant()
 }
 
@@ -178,15 +180,16 @@ if ($Action -eq "check") {
     }
 
     if ($CheckLive) {
-        $liveUrl = "https://raw.githubusercontent.com/houseofbugs/adguard-unified-blocklist/dist/blocklist.txt"
-        Write-Output "Checking live compiled list ($liveUrl)..."
+        $baseUrl = "https://raw.githubusercontent.com/houseofbugs/dfs-blocklist/dist"
+        $liveUrl = "$baseUrl/blocklist.txt"
+        Write-Output "Checking live AdGuard list ($liveUrl)..."
         $content = (Invoke-WebRequest -Uri $liveUrl -UseBasicParsing -TimeoutSec 30).Content
         $liveLines = $content -split "\r?\n"
 
         # Check exact domain/IP plus parent domains (since ||parent.com^ blocks sub.parent.com)
         $candidates = New-Object System.Collections.Generic.List[string]
         $candidates.Add($cleanTarget)
-        if ($cleanTarget -notmatch '^(\d{1,3}\.){3}\d{1,3}$' -and $cleanTarget -notmatch ':') {
+        if ($cleanTarget -notmatch '^(\d{1,3}\.){3}\d{1,3}(/\d{1,2})?$' -and $cleanTarget -notmatch ':') {
             $parts = $cleanTarget.Split('.')
             for ($i = 1; $i -lt ($parts.Length - 1); $i++) {
                 $candidates.Add(($parts[$i..($parts.Length - 1)] -join '.'))
@@ -205,10 +208,26 @@ if ($Action -eq "check") {
         }
 
         if ($liveMatches.Count -eq 0) {
-            Write-Output "  Live list: NO matching rules found for '$cleanTarget' (or its parent domains)."
+            Write-Output "  AdGuard live list: NO matching rules found for '$cleanTarget' (or its parent domains)."
         } else {
-            Write-Output "  Live list matching rules ($($liveMatches.Count)):"
+            Write-Output "  AdGuard live list matching rules ($($liveMatches.Count)):"
             foreach ($m in $liveMatches) { Write-Output "    $m" }
+        }
+
+        # Check live UDM domain and IP lists
+        $udmDomains = (Invoke-WebRequest -Uri "$baseUrl/udm-domains.txt" -UseBasicParsing -TimeoutSec 30).Content -split "\r?\n"
+        $udmDomainHits = @($candidates | Where-Object { $udmDomains -contains $_ })
+        if ($udmDomainHits.Count -gt 0) {
+            Write-Output "  UDM live domain list (udm-domains.txt): MATCH ($($udmDomainHits -join ', '))"
+        } else {
+            Write-Output "  UDM live domain list (udm-domains.txt): not present"
+        }
+
+        $udmIps = (Invoke-WebRequest -Uri "$baseUrl/udm-ips.txt" -UseBasicParsing -TimeoutSec 30).Content -split "\r?\n"
+        if ($udmIps -contains $cleanTarget) {
+            Write-Output "  UDM live IP list (udm-ips.txt): MATCH ($cleanTarget)"
+        } else {
+            Write-Output "  UDM live IP list (udm-ips.txt): not present"
         }
     }
     exit 0

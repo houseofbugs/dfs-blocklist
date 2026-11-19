@@ -1,7 +1,7 @@
 {
-  "name": "DFS Unified AdGuard Home Blocklist",
-  "description": "Unified auto-updating DNS blocklist (Ads, Trackers, Malware, Phishing & C2) for DFS and client AdGuard Home deployments.",
-  "homepage": "https://github.com/houseofbugs/adguard-unified-blocklist",
+  "name": "DFS Unified Blocklist",
+  "description": "Unified auto-updating DNS and firewall blocklist (Ads, Trackers, Malware, Phishing & C2) for DFS and client deployments.",
+  "homepage": "https://github.com/houseofbugs/dfs-blocklist",
   "license": "MIT",
   "sources": [
     {
