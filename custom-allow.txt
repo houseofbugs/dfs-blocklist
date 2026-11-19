@@ -1,0 +1,14 @@
+! DFS Unified AdGuard Home - Custom Allowlist
+! ==============================================
+! Add global exception rules here when a legitimate domain used by you or your
+! clients is blocked by an upstream list (false positive).
+!
+! Syntax:
+!   @@||example.com^$important
+!
+! Using `$important` ensures the allow rule overrides any upstream block rule
+! across all AdGuard Home deployments once compiled and synced.
+!
+! Examples (uncomment or add lines below):
+! @@||client-portal.example.com^$important
+! @@||tracking-required-by-app.example.net^$important

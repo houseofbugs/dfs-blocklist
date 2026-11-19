@@ -1,0 +1,65 @@
+name: Compile Unified AdGuard Blocklist
+
+on:
+  schedule:
+    - cron: '0 */12 * * *'
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Compile blocklist
+        run: npx -y @adguard/hostlist-compiler -c configuration.json -o raw-blocklist.txt
+
+      - name: Validate rule count and add metadata header
+        run: |
+          set -euo pipefail
+          RULE_COUNT=$(grep -cEv '^\s*($|!|#)' raw-blocklist.txt || true)
+          echo "Compiled rule count: $RULE_COUNT"
+          if [ "$RULE_COUNT" -lt 50000 ]; then
+            echo "::error::Compiled rule count ($RULE_COUNT) is below minimum threshold of 50000."
+            exit 1
+          fi
+          UPDATED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          {
+            echo "! Title: DFS Unified AdGuard Home Blocklist"
+            echo "! Description: Unified auto-updating DNS blocklist (Ads, Trackers, Malware, Phishing & C2) for DFS and client AdGuard Home deployments."
+            echo "! Homepage: https://github.com/houseofbugs/adguard-unified-blocklist"
+            echo "! License: MIT"
+            echo "! Expires: 12 hours"
+            echo "! Last modified: $UPDATED_AT"
+            echo "! Total rules: $RULE_COUNT"
+            echo "!"
+            cat raw-blocklist.txt
+          } > blocklist.txt
+          ls -lh blocklist.txt
+
+      - name: Publish blocklist to dist branch
+        run: |
+          set -euo pipefail
+          PUBLISH_DIR=$(mktemp -d)
+          cp blocklist.txt "$PUBLISH_DIR/blocklist.txt"
+          cp README.md "$PUBLISH_DIR/README.md"
+          cd "$PUBLISH_DIR"
+          git init -b dist
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add blocklist.txt README.md
+          git commit -m "Update compiled blocklist ($(date -u +'%Y-%m-%d %H:%M UTC'))"
+          git remote add origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
+          git push --force origin dist

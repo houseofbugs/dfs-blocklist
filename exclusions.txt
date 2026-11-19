@@ -1,0 +1,13 @@
+! DFS Unified AdGuard Home - Compilation Exclusions
+! ====================================================
+! Rules or patterns listed here are stripped out from all upstream sources during
+! compilation (via @adguard/hostlist-compiler `exclusions_sources`).
+!
+! Useful when you want to prevent specific upstream rules or regex patterns from
+! appearing in the final compiled `blocklist.txt` altogether.
+!
+! Supports exact rule strings, substrings, or /regex/ patterns.
+!
+! Examples (uncomment or add lines below):
+! ||example-false-positive.com^
+! /^.*\.some-overblocked-tld\^$/

@@ -1,0 +1,13 @@
+! DFS Unified AdGuard Home - Custom Blocklist
+! ==============================================
+! Add custom domain block rules here to enforce blocks across all AdGuard Home
+! deployments automatically.
+!
+! Syntax:
+!   ||bad-domain.com^
+!
+! Note: `||domain.com^` blocks `domain.com` and all of its subdomains.
+!
+! Examples (uncomment or add lines below):
+! ||known-phish.example.com^
+! ||unwanted-telemetry.example.net^
