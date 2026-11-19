@@ -1,0 +1,17 @@
+! DFS Unified AdGuard Home - Custom DNS Rewrites (Host-to-IP Mapping)
+! ======================================================================
+! Map or change a hostname to a specific IP address across all AdGuard Home
+! deployments using AdGuard's `$dnsrewrite` modifier.
+!
+! Syntax:
+!   ||host.example.com^$dnsrewrite=192.168.1.50
+!   ||host.example.com^$dnsrewrite=192.168.1.50,client=192.168.1.0/24
+!   ||host.example.com^$dnsrewrite=NOERROR;A;192.168.1.50
+!
+! Rules in this file are injected directly at the top of `blocklist.txt`
+! during compilation so modifiers like `$dnsrewrite` and `$client` are
+! always preserved intact.
+!
+! Examples (uncomment or add lines below):
+! ||nas.internal.example^$dnsrewrite=10.0.10.25
+! ||printer.office.local^$dnsrewrite=192.168.50.10,client=192.168.50.0/24

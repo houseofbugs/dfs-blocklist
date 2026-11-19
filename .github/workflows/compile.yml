@@ -30,11 +30,14 @@ jobs:
         run: |
           set -euo pipefail
           RULE_COUNT=$(grep -cEv '^\s*($|!|#)' raw-blocklist.txt || true)
-          echo "Compiled rule count: $RULE_COUNT"
+          echo "Compiled upstream rule count: $RULE_COUNT"
           if [ "$RULE_COUNT" -lt 50000 ]; then
             echo "::error::Compiled rule count ($RULE_COUNT) is below minimum threshold of 50000."
             exit 1
           fi
+          CUSTOM_RULES=$(cat custom-rewrites.txt custom-allow.txt custom-block.txt | tr -d '\r' | grep -Ev '^\s*($|!|#)' || true)
+          CUSTOM_COUNT=$(printf '%s\n' "$CUSTOM_RULES" | grep -cEv '^\s*$' || true)
+          TOTAL_COUNT=$((RULE_COUNT + CUSTOM_COUNT))
           UPDATED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
           {
             echo "! Title: DFS Unified AdGuard Home Blocklist"
@@ -43,8 +46,13 @@ jobs:
             echo "! License: MIT"
             echo "! Expires: 12 hours"
             echo "! Last modified: $UPDATED_AT"
-            echo "! Total rules: $RULE_COUNT"
+            echo "! Total rules: $TOTAL_COUNT"
             echo "!"
+            if [ -n "$CUSTOM_RULES" ]; then
+              echo "! --- DFS Custom Rules & DNS Rewrites ---"
+              printf '%s\n' "$CUSTOM_RULES"
+              echo "!"
+            fi
             cat raw-blocklist.txt
           } > blocklist.txt
           ls -lh blocklist.txt

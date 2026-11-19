@@ -61,7 +61,7 @@
     "ConvertToAscii",
     "Compress",
     "RemoveModifiers",
-    "Validate",
+    "ValidateAllowIp",
     "Deduplicate",
     "RemoveEmptyLines",
     "InsertFinalNewLine"

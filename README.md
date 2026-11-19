@@ -24,8 +24,15 @@ Changes pushed to `main` automatically trigger the GitHub Actions compiler, upda
 
 - **Allow a blocked domain globally (false positives):**
   Add an allow rule to [`custom-allow.txt`](custom-allow.txt) using `@@||example.com^$important` (or add the domain/rule to [`exclusions.txt`](exclusions.txt) to strip it during compilation).
-- **Block an additional domain globally:**
-  Add a rule to [`custom-block.txt`](custom-block.txt) using `||bad-domain.com^`.
+- **Block an additional domain or IP globally:**
+  Add a rule to [`custom-block.txt`](custom-block.txt) using `||bad-domain.com^` or `||203.0.113.45^`.
+- **Map or change a hostname's IP address (DNS rewrite):**
+  Add a rule to [`custom-rewrites.txt`](custom-rewrites.txt) using `||host.example.com^$dnsrewrite=192.168.1.50` (optionally scoped with `,client=192.168.1.0/24`).
+- **Quick CLI helper & Antigravity skills:**
+  Workspace skills in [`.agents/skills/`](.agents/skills/manage-hosts-and-ips/SKILL.md) include [`manage-rules.ps1`](.agents/skills/manage-hosts-and-ips/scripts/manage-rules.ps1) to add, remove, change, check, and push host/IP/rewrite rules:
+  ```powershell
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".agents\skills\manage-hosts-and-ips\scripts\manage-rules.ps1" -Action rewrite -Target "nas.internal.local" -Ip "10.0.10.25" -Push
+  ```
 - **Automatic schedule:**
   The [GitHub Action workflow](.github/workflows/compile.yml) recompiles and deduplicates all upstream lists every **12 hours** (`0 */12 * * *`), force-pushing a single clean commit to the `dist` branch so repository history stays small.
 
@@ -33,6 +40,7 @@ Changes pushed to `main` automatically trigger the GitHub Actions compiler, upda
 
 | Category | Feed Name | Source |
 | --- | --- | --- |
+| Custom Overrides | DFS Custom DNS Rewrites | [`custom-rewrites.txt`](custom-rewrites.txt) |
 | Custom Overrides | DFS Custom Blocklist | [`custom-block.txt`](custom-block.txt) |
 | Custom Overrides | DFS Custom Allowlist | [`custom-allow.txt`](custom-allow.txt) |
 | Ads & Trackers | AdGuard DNS Filter | `https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt` |
