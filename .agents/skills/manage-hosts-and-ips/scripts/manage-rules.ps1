@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("block", "allow", "rewrite", "remove", "check", "list")]
+    [ValidateSet("block", "allow", "rewrite", "remove", "sanction-rmm", "unsanction-rmm", "check", "list")]
     [string]$Action,
 
     [string]$Target,
@@ -16,10 +16,11 @@ $ErrorActionPreference = "Stop"
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..\..\..")).Path
 $files = @{
-    block     = Join-Path $repoRoot "custom-block.txt"
-    allow     = Join-Path $repoRoot "custom-allow.txt"
-    rewrite   = Join-Path $repoRoot "custom-rewrites.txt"
-    exclusion = Join-Path $repoRoot "exclusions.txt"
+    block      = Join-Path $repoRoot "custom-block.txt"
+    allow      = Join-Path $repoRoot "custom-allow.txt"
+    rewrite    = Join-Path $repoRoot "custom-rewrites.txt"
+    exclusion  = Join-Path $repoRoot "exclusions.txt"
+    sanctioned = Join-Path $repoRoot "sanctioned-rmm.txt"
 }
 
 foreach ($entry in $files.GetEnumerator()) {
@@ -141,7 +142,7 @@ function Get-ActiveRules {
 }
 
 if ($Action -eq "list") {
-    foreach ($key in @("rewrite", "allow", "block", "exclusion")) {
+    foreach ($key in @("rewrite", "allow", "block", "exclusion", "sanctioned")) {
         $path = $files[$key]
         $active = Get-ActiveRules -FilePath $path
         Write-Output "=== $(Split-Path $path -Leaf) ($($active.Count) active) ==="
@@ -174,6 +175,14 @@ if ($Action -eq "check") {
             Write-Output "  [$(Split-Path $path -Leaf)]"
             foreach ($m in $matches) { Write-Output "    $m" }
         }
+    }
+    $sancMatches = @(Get-ActiveRules -FilePath $files.sanctioned | Where-Object {
+        $_.Trim().ToLowerInvariant() -eq $cleanTarget
+    })
+    if ($sancMatches.Count -gt 0) {
+        $foundLocal = $true
+        Write-Output "  [sanctioned-rmm.txt]"
+        foreach ($m in $sancMatches) { Write-Output "    $m" }
     }
     if (-not $foundLocal) {
         Write-Output "  No custom rules found locally for '$cleanTarget'."
@@ -315,16 +324,51 @@ switch ($Action) {
             Write-Output "No rules matching '$cleanTarget' were found in any custom file."
         }
     }
+
+    "sanction-rmm" {
+        $toolEntry = $Target.Trim()
+        $existing = Get-ActiveRules -FilePath $files.sanctioned
+        if ($existing | Where-Object { $_.Trim().ToLowerInvariant() -eq $toolEntry.ToLowerInvariant() }) {
+            Write-Output "'$toolEntry' is already sanctioned in sanctioned-rmm.txt."
+        } else {
+            Add-RuleToFile -FilePath $files.sanctioned -RuleLine $toolEntry -Note $Comment
+            $changed = $true
+            Write-Output "Added '$toolEntry' to sanctioned-rmm.txt (excluded from LOLRMM blocking & whitelisted across outputs)."
+        }
+    }
+
+    "unsanction-rmm" {
+        $toolEntry = $Target.Trim()
+        $lines = Get-Content -Path $files.sanctioned -Encoding UTF8
+        if ($null -eq $lines) { $lines = @() }
+        $kept = New-Object System.Collections.Generic.List[string]
+        $removed = New-Object System.Collections.Generic.List[string]
+        foreach ($line in $lines) {
+            $t = $line.Trim()
+            if (-not [string]::IsNullOrWhiteSpace($t) -and -not $t.StartsWith("!") -and -not $t.StartsWith("#") -and $t.ToLowerInvariant() -eq $toolEntry.ToLowerInvariant()) {
+                $removed.Add($line)
+            } else {
+                $kept.Add($line)
+            }
+        }
+        if ($removed.Count -gt 0) {
+            Set-Content -Path $files.sanctioned -Value $kept -Encoding UTF8
+            $changed = $true
+            Write-Output "Removed from sanctioned-rmm.txt: $($removed -join ', ')"
+        } else {
+            Write-Output "'$toolEntry' was not found in sanctioned-rmm.txt."
+        }
+    }
 }
 
 if ($Push -and $changed) {
     Push-Location $repoRoot
     try {
         $ErrorActionPreference = "Continue"
-        git add custom-block.txt custom-allow.txt custom-rewrites.txt exclusions.txt
+        git add custom-block.txt custom-allow.txt custom-rewrites.txt exclusions.txt sanctioned-rmm.txt
         if ($LASTEXITCODE -ne 0) { throw "git add failed with exit code $LASTEXITCODE" }
 
-        $status = git status --porcelain -- custom-block.txt custom-allow.txt custom-rewrites.txt exclusions.txt
+        $status = git status --porcelain -- custom-block.txt custom-allow.txt custom-rewrites.txt exclusions.txt sanctioned-rmm.txt
         if ([string]::IsNullOrWhiteSpace(($status -join ""))) {
             Write-Output "No git diff to commit."
             exit 0

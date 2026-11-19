@@ -1,0 +1,18 @@
+﻿! DFS Sanctioned RMM & Remote Access Tools
+! ==========================================
+! List approved RMM tool names (matching the `RMM_Tool` column in
+! https://lolrmm.io/api/rmm_domains.csv, case-insensitive) or specific domains.
+!
+! Every tool listed here is:
+!   1. Excluded from the LOLRMM unauthorized RMM blocklist
+!   2. Automatically whitelisted (`@@||domain^$important` in AdGuard Home and
+!      excluded from UDM blocklists) so no other upstream feed can block it.
+!
+! Note for self-hosted RustDesk:
+!   Sanctioning `RustDesk` below allows rustdesk.com (client downloads/updates)
+!   as well as public relays. If you ever want to block public RustDesk relays
+!   while keeping your self-hosted relay working, remove `RustDesk` below and
+!   add your self-hosted relay domain/IP to `custom-allow.txt`.
+
+Action1
+RustDesk

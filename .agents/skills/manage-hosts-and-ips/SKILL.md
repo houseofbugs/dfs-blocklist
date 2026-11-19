@@ -18,6 +18,7 @@ All rule changes go into version-controlled files at the repository root and are
 - [`custom-allow.txt`](../../../../custom-allow.txt) — Force-allow domains/IPs globally (`@@||target^$important`)
 - [`custom-rewrites.txt`](../../../../custom-rewrites.txt) — Map or change a host's resolved IP in AdGuard Home (`||host^$dnsrewrite=IP`)
 - [`exclusions.txt`](../../../../exclusions.txt) — Strip matching rules from upstream feeds during compilation (both AdGuard and UDM lists)
+- [`sanctioned-rmm.txt`](../../../../sanctioned-rmm.txt) — Approved RMM tools/domains excluded from the [LOLRMM](https://lolrmm.io) feed and whitelisted globally (pre-configured with `Action1` and `RustDesk`)
 
 For syntax details and advanced modifiers (`$client`, `$dnstype`, IPv6, CIDR, regex), read [adguard-dns-syntax.md](./references/adguard-dns-syntax.md).
 
@@ -65,9 +66,18 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".agents\skills\manage-h
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".agents\skills\manage-hosts-and-ips\scripts\manage-rules.ps1" -Action remove -Target "old-host.example.com"
 ```
 
-### 5. Check or List Rules
+### 5. Allow or Block an RMM Tool (LOLRMM Integration)
 
-List all active custom rules across all four files:
+Unauthorized RMM tools from `https://lolrmm.io/api/rmm_domains.csv` are blocked automatically unless listed in [`sanctioned-rmm.txt`](../../../../sanctioned-rmm.txt). To approve or un-approve an RMM tool:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".agents\skills\manage-hosts-and-ips\scripts\manage-rules.ps1" -Action sanction-rmm -Target "ScreenConnect" -Push
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".agents\skills\manage-hosts-and-ips\scripts\manage-rules.ps1" -Action unsanction-rmm -Target "ScreenConnect" -Push
+```
+
+### 6. Check or List Rules
+
+List all active custom rules across all custom files (including `sanctioned-rmm.txt`):
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".agents\skills\manage-hosts-and-ips\scripts\manage-rules.ps1" -Action list
@@ -81,7 +91,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".agents\skills\manage-h
 
 ## Deploying & Verifying Changes
 
-1. Pass `-Push` to `manage-rules.ps1` (or run `git add custom-*.txt exclusions.txt && git commit -m "..." && git push`) to push to `origin/main`.
+1. Pass `-Push` to `manage-rules.ps1` (or run `git add custom-*.txt exclusions.txt sanctioned-rmm.txt && git commit -m "..." && git push`) to push to `origin/main`.
 2. Pushing to `main` triggers `.github/workflows/compile.yml` (~45–90 seconds).
 3. Verify the latest workflow run succeeded and the live files updated:
    ```powershell
