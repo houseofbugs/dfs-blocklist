@@ -23,7 +23,7 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Compile AdGuard blocklist
+      - name: Compile AdGuard upstream blocklist
         run: npx -y @adguard/hostlist-compiler -c configuration.json -o raw-blocklist.txt
 
       - name: Fetch and process LOLRMM feed
@@ -99,6 +99,11 @@ jobs:
                       return True
               return False
 
+          def is_user_allowed(clean_uri):
+              if clean_uri in user_allow:
+                  return True
+              return any(clean_uri.endswith("." + a) for a in user_allow if "." in a and not ip_re.match(a))
+
           def add_unique(seq, seen, item):
               if item not in seen:
                   seen.add(item)
@@ -127,7 +132,7 @@ jobs:
                       add_unique(sanctioned_ag_allow, seen_sanc_ag, f"@@||{clean_uri}^$important")
                   continue
 
-              if clean_uri in user_allow:
+              if is_user_allowed(clean_uri):
                   continue
 
               add_unique(lolrmm_ag_rules, seen_ag, f"||{clean_uri}^")
@@ -176,141 +181,428 @@ jobs:
           print(f"LOLRMM UDM domains: {len(lolrmm_udm_domains)}, UDM IPs: {len(lolrmm_udm_ips)}")
           EOF
 
-      - name: Validate rule count and add metadata header
+      - name: Build and deduplicate UDM/UCG domain and IP lists
         run: |
-          set -euo pipefail
-          RULE_COUNT=$(grep -cEv '^\s*($|!|#)' raw-blocklist.txt || true)
-          echo "Compiled upstream rule count: $RULE_COUNT"
-          if [ "$RULE_COUNT" -lt 50000 ]; then
-            echo "::error::Compiled rule count ($RULE_COUNT) is below minimum threshold of 50000."
-            exit 1
-          fi
-          CUSTOM_RULES=$(cat custom-rewrites.txt custom-allow.txt custom-block.txt | tr -d '\r' | grep -Ev '^\s*($|!|#)' || true)
-          CUSTOM_COUNT=$(printf '%s\n' "$CUSTOM_RULES" | grep -cEv '^\s*$' || true)
-          SANC_COUNT=$(grep -cEv '^\s*($|!|#)' sanctioned-adguard-allow.txt || true)
-          LOLRMM_COUNT=$(grep -cEv '^\s*($|!|#)' lolrmm-adguard-rules.txt || true)
-          TOTAL_COUNT=$((RULE_COUNT + CUSTOM_COUNT + SANC_COUNT + LOLRMM_COUNT))
-          UPDATED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-          {
-            echo "! Title: DFS Unified Blocklist (AdGuard Home)"
-            echo "! Description: Unified auto-updating DNS and firewall blocklist (Ads, Trackers, Malware, Phishing, C2 & Unauthorized RMM) for DFS and client deployments."
-            echo "! Homepage: https://github.com/houseofbugs/dfs-blocklist"
-            echo "! License: MIT"
-            echo "! Expires: 12 hours"
-            echo "! Last modified: $UPDATED_AT"
-            echo "! Total rules: $TOTAL_COUNT"
-            echo "!"
-            if [ -n "$CUSTOM_RULES" ]; then
-              echo "! --- DFS Custom Rules & DNS Rewrites ---"
-              printf '%s\n' "$CUSTOM_RULES"
-              echo "!"
-            fi
-            if [ -s sanctioned-adguard-allow.txt ]; then
-              echo "! --- DFS Sanctioned RMM Allowlist ---"
-              cat sanctioned-adguard-allow.txt
-              echo "!"
-            fi
-            if [ -s lolrmm-adguard-rules.txt ]; then
-              echo "! --- DFS LOLRMM Unauthorized RMM Blocklist ---"
-              cat lolrmm-adguard-rules.txt
-              echo "!"
-            fi
-            cat raw-blocklist.txt
-          } > blocklist.txt
-          ls -lh blocklist.txt lolrmm-adguard.txt
+          python3 - <<'EOF'
+          import ipaddress
+          import re
+          import time
+          import urllib.request
 
-      - name: Build UDM/UCG plain-text domain and IP lists
-        run: |
-          set -euo pipefail
+          IP_RE = re.compile(r"^(\d{1,3}\.){3}\d{1,3}(/\d{1,2})?$")
+          DOMAIN_RE = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$")
+          ADBLOCK_DOM_RE = re.compile(r"^\|\|([a-z0-9.-]+)\^$")
+          PUBLIC_SUFFIX_SKIP = {"us.kg", "xx.kg"}
 
-          # 1. Build normalized allow/exclusion set (domains and IPs, including sanctioned RMMs)
-          cat custom-allow.txt exclusions.txt sanctioned-domains-ips.txt \
-            | tr -d '\r' \
-            | grep -Ev '^\s*($|!|#)' \
-            | sed -E 's/^@@\|\|//; s/^\|\|//; s/\^.*$//; s/\s+$//' \
-            | tr '[:upper:]' '[:lower:]' \
-            | grep -Ev '^\s*$' \
-            | sort -u > allow-set.txt || true
+          def read_active_lines(path):
+              lines = []
+              try:
+                  with open(path, "r", encoding="utf-8") as fh:
+                      for raw in fh:
+                          t = raw.strip()
+                          if not t or t.startswith("!") or t.startswith("#") or t.startswith(";"):
+                              continue
+                          lines.append(t)
+              except FileNotFoundError:
+                  pass
+              return lines
 
-          filter_allowed() {
-            if [ -s allow-set.txt ]; then
-              grep -vxFf allow-set.txt || true
-            else
-              cat
-            fi
-          }
+          def normalize_token(rule):
+              val = rule.strip().lower()
+              val = re.sub(r"^@@", "", val)
+              val = re.sub(r"^\|\|", "", val)
+              val = re.sub(r"\^.*$", "", val)
+              return val.rstrip(".").strip()
 
-          # 2. Extract custom blocked domains & custom blocked IPs/CIDRs from custom-block.txt
-          cat custom-block.txt \
-            | tr -d '\r' \
-            | grep -Ev '^\s*($|!|#)' \
-            | sed -E 's/^\|\|//; s/\^.*$//; s/\s+$//' \
-            | tr '[:upper:]' '[:lower:]' > custom-block-clean.txt || true
+          def fetch_text(url, required=True, timeout=30):
+              last_err = None
+              for attempt in range(1, 3):
+                  try:
+                      req = urllib.request.Request(url, headers={"User-Agent": "DFS-Blocklist-Compiler/1.0"})
+                      with urllib.request.urlopen(req, timeout=timeout) as resp:
+                          return resp.read().decode("utf-8", errors="replace")
+                  except Exception as exc:
+                      last_err = exc
+                      print(f"Attempt {attempt} failed for {url}: {exc}")
+                      if attempt < 2:
+                          time.sleep(2)
+              if required:
+                  raise RuntimeError(f"Required upstream feed failed ({url}): {last_err}")
+              print(f"Warning: skipping unavailable optional feed ({url}): {last_err}")
+              return ""
 
-          grep -E '^([0-9]{1,3}\.){3}[0-9]{1,3}(/[0-9]{1,2})?$' custom-block-clean.txt > custom-ips.txt || true
-          grep -E '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$' custom-block-clean.txt \
-            | grep -Ev '^([0-9]{1,3}\.){3}[0-9]{1,3}$' > custom-domains.txt || true
+          # 1. Build allowed domain & IP guards (including subdomains and CIDRs)
+          allowed_domains = set()
+          allowed_nets = []
+          for path in ("custom-allow.txt", "exclusions.txt", "sanctioned-domains-ips.txt"):
+              for line in read_active_lines(path):
+                  tok = normalize_token(line)
+                  if not tok:
+                      continue
+                  if IP_RE.match(tok):
+                      try:
+                          allowed_nets.append(ipaddress.ip_network(tok, strict=False))
+                      except ValueError:
+                          pass
+                  elif DOMAIN_RE.match(tok):
+                      allowed_domains.add(tok)
 
-          # 3. Build UDM High-Confidence Threat + LOLRMM Domain List (udm-domains.txt, capped at 9500 entries)
-          curl -fsSL "https://malware-filter.gitlab.io/malware-filter/urlhaus-filter-agh-online.txt" > udm-threat-raw.txt
-          curl -fsSL "https://raw.githubusercontent.com/DandelionSprout/adfilt/master/Alternate%20versions%20Anti-Malware%20List/AntiMalwareAdGuardHome.txt" >> udm-threat-raw.txt
-          curl -fsSL "https://malware-filter.gitlab.io/malware-filter/phishing-filter-agh.txt" >> udm-threat-raw.txt
+          def is_allowed_domain(dom):
+              if dom in allowed_domains:
+                  return True
+              return any(dom.endswith("." + a) for a in allowed_domains)
 
-          cat udm-threat-raw.txt \
-            | tr -d '\r' \
-            | grep -E '^\|\|[a-zA-Z0-9.-]+\^$' \
-            | sed -E 's/^\|\|//; s/\^$//' \
-            | tr '[:upper:]' '[:lower:]' \
-            | grep -E '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$' \
-            | grep -Ev '^([0-9]{1,3}\.){3}[0-9]{1,3}$' > udm-threat-domains.txt
+          def is_allowed_net(net):
+              return any(net.subnet_of(a) or a.subnet_of(net) for a in allowed_nets)
 
-          cat custom-domains.txt lolrmm-udm-domains.txt udm-threat-domains.txt \
-            | awk '!seen[$0]++' \
-            | filter_allowed > udm-domains-capped-src.tmp
+          def extract_domains(text):
+              out = []
+              for raw in text.splitlines():
+                  t = raw.strip().lower()
+                  if not t or t.startswith("!") or t.startswith("#") or t.startswith(";") or t.startswith("[") or t.startswith("@@"):
+                      continue
+                  m = ADBLOCK_DOM_RE.match(t)
+                  if m:
+                      cand = m.group(1).rstrip(".")
+                  else:
+                      t = t.split("#", 1)[0].strip()
+                      parts = t.split()
+                      if not parts:
+                          continue
+                      if parts[0] in ("0.0.0.0", "127.0.0.1", "::", "::1") and len(parts) >= 2:
+                          cand = parts[1].rstrip(".")
+                      elif len(parts) == 1:
+                          cand = parts[0].rstrip(".")
+                      else:
+                          continue
+                  if not IP_RE.match(cand) and DOMAIN_RE.match(cand):
+                      out.append(cand)
+              return out
 
-          head -n 9500 udm-domains-capped-src.tmp > udm-domains.txt
+          def extract_ips(text):
+              nets = []
+              for raw in text.splitlines():
+                  t = raw.strip()
+                  if not t or t.startswith("#") or t.startswith("!") or t.startswith(";"):
+                      continue
+                  t = re.split(r"\s*[#;]", t, maxsplit=1)[0].strip()
+                  t = normalize_token(t)
+                  if not IP_RE.match(t):
+                      continue
+                  try:
+                      net = ipaddress.ip_network(t, strict=False)
+                  except ValueError:
+                      continue
+                  if net.version != 4 or net.is_private or net.is_loopback or net.is_multicast or net.is_unspecified:
+                      continue
+                  nets.append(net)
+              return nets
+
+          # 2. Extract custom domains & custom IPs from custom-block.txt (Priority 1, kept verbatim)
+          custom_domains = []
+          custom_domain_seen = set()
+          custom_nets = []
+          custom_ip_seen = set()
+
+          for line in read_active_lines("custom-block.txt"):
+              tok = normalize_token(line)
+              if not tok:
+                  continue
+              if IP_RE.match(tok):
+                  try:
+                      net = ipaddress.ip_network(tok, strict=False)
+                      key = str(net) if net.prefixlen < 32 else str(net.network_address)
+                      if not is_allowed_net(net) and key not in custom_ip_seen:
+                          custom_ip_seen.add(key)
+                          custom_nets.append((key, net))
+                  except ValueError:
+                      pass
+              elif DOMAIN_RE.match(tok):
+                  if not is_allowed_domain(tok) and tok not in custom_domain_seen:
+                      custom_domain_seen.add(tok)
+                      custom_domains.append(tok)
+
+          def build_deduped_domains(priority1, upstream_candidates):
+              # Build parent lookup from non-public-suffix domains in priority1 + upstream
+              covered_parents = {d for d in priority1 if d not in PUBLIC_SUFFIX_SKIP}
+              for d in upstream_candidates:
+                  if not is_allowed_domain(d):
+                      covered_parents.add(d)
+
+              result = list(priority1)
+              seen = set(priority1)
+              pruned_subdomains = 0
+
+              for d in upstream_candidates:
+                  if is_allowed_domain(d) or d in seen:
+                      continue
+                  # Drop upstream subdomain if any parent domain is already blocked
+                  parts = d.split(".")
+                  has_parent = False
+                  for idx in range(1, len(parts) - 1):
+                      parent = ".".join(parts[idx:])
+                      if parent not in PUBLIC_SUFFIX_SKIP and parent in covered_parents:
+                          has_parent = True
+                          break
+                  if has_parent:
+                      pruned_subdomains += 1
+                      continue
+                  seen.add(d)
+                  result.append(d)
+
+              return result, pruned_subdomains
+
+          # 3. Build UDM High-Confidence Domain List (udm-domains.txt, capped at 9500)
+          udm_domain_feeds = [
+              ("Abuse.ch URLHaus", "https://malware-filter.gitlab.io/malware-filter/urlhaus-filter-agh-online.txt", True),
+              ("AssoEchap Stalkerware", "https://raw.githubusercontent.com/AssoEchap/stalkerware-indicators/master/generated/hosts", True),
+              ("NoCoin Cryptojacking", "https://raw.githubusercontent.com/hoshsadiq/adblock-nocoin-list/master/hosts.txt", True),
+              ("HaGeZi Badware Hoster", "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/hoster.txt", True),
+              ("HaGeZi Dynamic DNS", "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/dyndns.txt", True),
+              ("ShadowWhisperer Scam", "https://raw.githubusercontent.com/ShadowWhisperer/BlockLists/master/Lists/Scam", True),
+              ("DandelionSprout Anti-Malware", "https://raw.githubusercontent.com/DandelionSprout/adfilt/master/Alternate%20versions%20Anti-Malware%20List/AntiMalwareAdGuardHome.txt", True),
+              ("ShadowWhisperer Malware", "https://raw.githubusercontent.com/ShadowWhisperer/BlockLists/master/Lists/Malware", True),
+              ("Phishing URL Blocklist", "https://malware-filter.gitlab.io/malware-filter/phishing-filter-agh.txt", True),
+          ]
+
+          lolrmm_udm_doms = extract_domains("\n".join(read_active_lines("lolrmm-udm-domains.txt")))
+          udm_upstream_doms = list(lolrmm_udm_doms)
+          for name, url, req in udm_domain_feeds:
+              txt = fetch_text(url, required=req)
+              doms = extract_domains(txt)
+              print(f"UDM domain feed [{name}]: {len(doms)} extracted")
+              udm_upstream_doms.extend(doms)
+
+          udm_domains_all, pruned_udm = build_deduped_domains(custom_domains, udm_upstream_doms)
+          udm_domains_capped = udm_domains_all[:9500]
+          with open("udm-domains.txt", "w", encoding="utf-8", newline="\n") as fh:
+              fh.write("\n".join(udm_domains_capped) + "\n")
 
           # 4. Build UDM Full Plain Domain List (udm-domains-full.txt)
-          cat raw-blocklist.txt \
-            | tr -d '\r' \
-            | grep -E '^\|\|[a-zA-Z0-9.-]+\^$' \
-            | sed -E 's/^\|\|//; s/\^$//' \
-            | tr '[:upper:]' '[:lower:]' \
-            | grep -E '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$' \
-            | grep -Ev '^([0-9]{1,3}\.){3}[0-9]{1,3}$' > full-extracted-domains.txt
+          with open("raw-blocklist.txt", "r", encoding="utf-8") as fh:
+              raw_doms = extract_domains(fh.read())
+          udm_domains_full, pruned_full = build_deduped_domains(custom_domains, lolrmm_udm_doms + raw_doms)
+          with open("udm-domains-full.txt", "w", encoding="utf-8", newline="\n") as fh:
+              fh.write("\n".join(udm_domains_full) + "\n")
 
-          cat custom-domains.txt lolrmm-udm-domains.txt full-extracted-domains.txt \
-            | awk '!seen[$0]++' \
-            | filter_allowed > udm-domains-full.txt
+          # 5. Build UDM IP/CIDR Lists with subnet containment deduplication
+          ip_feeds = [
+              ("LOLRMM IPs", None, True),
+              ("Abuse.ch SSLBL C2 IPs", "https://sslbl.abuse.ch/blacklist/sslipblacklist.txt", False),
+              ("Proofpoint Compromised IPs", "https://rules.emergingthreats.net/blockrules/compromised-ips.txt", True),
+              ("Spamhaus DROP", "https://www.spamhaus.org/drop/drop.txt", True),
+              ("HaGeZi TIF IPs", "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/ips/tif.txt", True),
+              ("CINSscore CI Army IPs", "https://cinsscore.com/list/ci-badguys.txt", True),
+          ]
 
-          # 5. Build UDM Threat + LOLRMM IP/CIDR Lists (udm-ips.txt capped at 9500, and udm-ips-full.txt)
-          curl -fsSL "https://www.spamhaus.org/drop/drop.txt" \
-            | tr -d '\r' \
-            | grep -Ev '^\s*($|;)' \
-            | sed -E 's/\s*;.*$//; s/\s+$//' \
-            | grep -E '^([0-9]{1,3}\.){3}[0-9]{1,3}(/[0-9]{1,2})?$' > spamhaus-drop.txt
+          upstream_nets = []
+          for name, url, req in ip_feeds:
+              if url is None:
+                  nets = extract_ips("\n".join(read_active_lines("lolrmm-udm-ips.txt")))
+              else:
+                  nets = extract_ips(fetch_text(url, required=req))
+              print(f"UDM IP feed [{name}]: {len(nets)} extracted")
+              upstream_nets.extend(nets)
 
-          curl -fsSL "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/ips/tif.txt" \
-            | tr -d '\r' \
-            | grep -Ev '^\s*($|#|!)' \
-            | sed -E 's/\s+$//' \
-            | grep -E '^([0-9]{1,3}\.){3}[0-9]{1,3}(/[0-9]{1,2})?$' > hagezi-tif-ips.txt
+          # O(1) CIDR containment lookup across all active CIDRs (custom + upstream)
+          cidr_lookup = set()
+          prefix_lens = set()
+          for _, net in custom_nets:
+              if net.prefixlen < 32:
+                  cidr_lookup.add((int(net.network_address), net.prefixlen))
+                  prefix_lens.add(net.prefixlen)
+          for net in upstream_nets:
+              if not is_allowed_net(net) and net.prefixlen < 32:
+                  cidr_lookup.add((int(net.network_address), net.prefixlen))
+                  prefix_lens.add(net.prefixlen)
+          sorted_prefixes = sorted(prefix_lens)
 
-          cat custom-ips.txt lolrmm-udm-ips.txt spamhaus-drop.txt hagezi-tif-ips.txt \
-            | awk '!seen[$0]++' \
-            | filter_allowed > udm-ips-full.txt
+          def covered_by_supernet(net):
+              addr_int = int(net.network_address)
+              for p in sorted_prefixes:
+                  if p >= net.prefixlen:
+                      break
+                  mask = (0xFFFFFFFF << (32 - p)) & 0xFFFFFFFF
+                  if (addr_int & mask, p) in cidr_lookup:
+                      return True
+              return False
 
-          head -n 9500 udm-ips-full.txt > udm-ips.txt
+          final_ips = [key for key, _ in custom_nets]
+          seen_ips = set(final_ips)
+          collapsed_ips = 0
 
-          if [ ! -s udm-domains.txt ] || [ ! -s udm-ips.txt ]; then
-            echo "::error::Generated UDM domain or IP list is empty."
-            exit 1
-          fi
+          for net in upstream_nets:
+              if is_allowed_net(net):
+                  continue
+              key = str(net) if net.prefixlen < 32 else str(net.network_address)
+              if key in seen_ips:
+                  collapsed_ips += 1
+                  continue
+              if covered_by_supernet(net):
+                  collapsed_ips += 1
+                  continue
+              seen_ips.add(key)
+              final_ips.append(key)
 
-          echo "UDM domain list count: $(wc -l < udm-domains.txt)"
-          echo "UDM full domain list count: $(wc -l < udm-domains-full.txt)"
-          echo "UDM IP list count: $(wc -l < udm-ips.txt)"
-          echo "UDM full IP list count: $(wc -l < udm-ips-full.txt)"
+          with open("udm-ips-full.txt", "w", encoding="utf-8", newline="\n") as fh:
+              fh.write("\n".join(final_ips) + "\n")
+
+          udm_ips_capped = final_ips[:9500]
+          with open("udm-ips.txt", "w", encoding="utf-8", newline="\n") as fh:
+              fh.write("\n".join(udm_ips_capped) + "\n")
+
+          if not udm_domains_capped or not udm_ips_capped:
+              raise RuntimeError("Generated UDM domain or IP list is empty.")
+
+          print(f"UDM domains: {len(udm_domains_capped)} (pruned {pruned_udm} redundant upstream subdomains)")
+          print(f"UDM full domains: {len(udm_domains_full)} (pruned {pruned_full} redundant upstream subdomains)")
+          print(f"UDM IPs: {len(udm_ips_capped)} / {len(final_ips)} full (collapsed {collapsed_ips} duplicate/CIDR-covered IPs)")
+          EOF
+
+      - name: Assemble and deduplicate final AdGuard blocklist.txt
+        run: |
+          python3 - <<'EOF'
+          import datetime
+          import ipaddress
+          import re
+
+          IP_RE = re.compile(r"^(\d{1,3}\.){3}\d{1,3}(/\d{1,2})?$")
+          SINGLE_IPV4_RE = re.compile(r"^(\d{1,3}\.){3}\d{1,3}$")
+          DOMAIN_RE = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$")
+          RULE_TARGET_RE = re.compile(r"^\|\|([a-zA-Z0-9.-]+)\^")
+
+          def read_active_lines(path):
+              lines = []
+              try:
+                  with open(path, "r", encoding="utf-8") as fh:
+                      for raw in fh:
+                          t = raw.strip()
+                          if not t or t.startswith("!") or t.startswith("#"):
+                              continue
+                          lines.append(t)
+              except FileNotFoundError:
+                  pass
+              return lines
+
+          def normalize_token(rule):
+              val = rule.strip().lower()
+              val = re.sub(r"^@@", "", val)
+              val = re.sub(r"^\|\|", "", val)
+              val = re.sub(r"\^.*$", "", val)
+              return val.rstrip(".").strip()
+
+          allowed_domains = set()
+          allowed_nets = []
+          for path in ("custom-allow.txt", "exclusions.txt", "sanctioned-domains-ips.txt"):
+              for line in read_active_lines(path):
+                  tok = normalize_token(line)
+                  if not tok:
+                      continue
+                  if IP_RE.match(tok):
+                      try:
+                          allowed_nets.append(ipaddress.ip_network(tok, strict=False))
+                      except ValueError:
+                          pass
+                  elif DOMAIN_RE.match(tok):
+                      allowed_domains.add(tok)
+
+          def is_blocked_target_allowed(target):
+              t = target.lower().rstrip(".")
+              if IP_RE.match(t):
+                  try:
+                      net = ipaddress.ip_network(t, strict=False)
+                      return any(net.subnet_of(a) or a.subnet_of(net) for a in allowed_nets)
+                  except ValueError:
+                      return False
+              if t in allowed_domains:
+                  return True
+              return any(t.endswith("." + a) for a in allowed_domains)
+
+          seen_rules = set()
+          sections = []
+
+          def add_section(header, paths):
+              sec_rules = []
+              for p in paths:
+                  for line in read_active_lines(p):
+                      key = line.lower()
+                      if key in seen_rules:
+                          continue
+                      seen_rules.add(key)
+                      sec_rules.append(line)
+              if sec_rules:
+                  sections.append((header, sec_rules))
+
+          add_section("! --- DFS Custom DNS Rewrites ---", ["custom-rewrites.txt"])
+          add_section("! --- DFS Custom Allowlist ---", ["custom-allow.txt"])
+          add_section("! --- DFS Sanctioned RMM Allowlist ---", ["sanctioned-adguard-allow.txt"])
+          add_section("! --- DFS Custom Blocklist ---", ["custom-block.txt"])
+          add_section("! --- DFS LOLRMM Unauthorized RMM Blocklist ---", ["lolrmm-adguard-rules.txt"])
+
+          upstream_rules = []
+          skipped_dupes = 0
+          skipped_allowed = 0
+
+          with open("raw-blocklist.txt", "r", encoding="utf-8") as fh:
+              for raw in fh:
+                  line = raw.strip()
+                  if not line or line.startswith("!") or line.startswith("#"):
+                      continue
+                  key = line.lower()
+                  if key in seen_rules:
+                      skipped_dupes += 1
+                      continue
+                  if not line.startswith("@@"):
+                      m = RULE_TARGET_RE.match(line)
+                      if m and is_blocked_target_allowed(m.group(1)):
+                          skipped_allowed += 1
+                          continue
+                  seen_rules.add(key)
+                  upstream_rules.append(line)
+
+          # Also include single IPv4 threat IPs from udm-ips.txt in AdGuard blocklist.txt
+          ip_rules_added = 0
+          for line in read_active_lines("udm-ips.txt"):
+              if not SINGLE_IPV4_RE.match(line):
+                  continue
+              rule = f"||{line}^"
+              key = rule.lower()
+              if key in seen_rules:
+                  skipped_dupes += 1
+                  continue
+              if is_blocked_target_allowed(line):
+                  skipped_allowed += 1
+                  continue
+              seen_rules.add(key)
+              upstream_rules.append(rule)
+              ip_rules_added += 1
+
+          if len(upstream_rules) < 50000:
+              raise RuntimeError(f"Upstream compiled rule count ({len(upstream_rules)}) is below minimum threshold of 50000.")
+
+          total_rules = sum(len(r) for _, r in sections) + len(upstream_rules)
+          assert total_rules == len(seen_rules), f"Deduplication mismatch: {total_rules} vs {len(seen_rules)}"
+
+          updated_at = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+          with open("blocklist.txt", "w", encoding="utf-8", newline="\n") as fh:
+              fh.write("! Title: DFS Unified Blocklist (AdGuard Home)\n")
+              fh.write("! Description: Unified auto-updating DNS and firewall blocklist (Ads, Trackers, Malware, Phishing, C2 & Unauthorized RMM) for DFS and client deployments.\n")
+              fh.write("! Homepage: https://github.com/houseofbugs/dfs-blocklist\n")
+              fh.write("! License: MIT\n")
+              fh.write("! Expires: 12 hours\n")
+              fh.write(f"! Last modified: {updated_at}\n")
+              fh.write(f"! Total rules: {total_rules}\n")
+              fh.write("!\n")
+              for header, sec_rules in sections:
+                  fh.write(header + "\n")
+                  fh.write("\n".join(sec_rules) + "\n")
+                  fh.write("!\n")
+              fh.write("! --- Compiled Upstream & Threat Intelligence Rules ---\n")
+              fh.write("\n".join(upstream_rules) + "\n")
+
+          print(f"Final blocklist.txt total rules: {total_rules} (added {ip_rules_added} threat IPs, removed {skipped_dupes} cross-section dupes, filtered {skipped_allowed} allowed matches)")
+          EOF
+          ls -lh blocklist.txt lolrmm-adguard.txt udm-domains.txt udm-ips.txt
 
       - name: Publish blocklists to dist branch
         run: |

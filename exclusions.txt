@@ -11,3 +11,11 @@
 ! Examples (uncomment or add lines below):
 ! ||example-false-positive.com^
 ! /^.*\.some-overblocked-tld\^$/
+! DFS primary company domain
+||digitalforgesystems.com^
+! DFS in-house self-hosted RustDesk relay
+||rustdesk.digitalforgesystems.com^
+! DFS secondary company domain
+||dfsys.it^
+! DFS self-hosted RustDesk WAN IP
+||184.18.0.169^

@@ -12,3 +12,11 @@
 ! Examples (uncomment or add lines below):
 ! @@||client-portal.example.com^$important
 ! @@||tracking-required-by-app.example.net^$important
+! DFS primary company domain
+@@||digitalforgesystems.com^$important
+! DFS in-house self-hosted RustDesk relay
+@@||rustdesk.digitalforgesystems.com^$important
+! DFS secondary company domain
+@@||dfsys.it^$important
+! DFS self-hosted RustDesk WAN IP
+@@||184.18.0.169^$important

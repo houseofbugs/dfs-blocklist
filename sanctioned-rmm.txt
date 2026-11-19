@@ -15,4 +15,3 @@
 !   add your self-hosted relay domain/IP to `custom-allow.txt`.
 
 Action1
-RustDesk

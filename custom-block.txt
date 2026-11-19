@@ -27,3 +27,16 @@
 ||simple.opanam.org^
 ! Parent domain for the rogue SimpleHelp server to block any new subdomains
 ||opanam.org^
+! High-risk disposable & phishing TLDs
+||zip^
+||mov^
+||top^
+||gq^
+||tk^
+||ml^
+||cf^
+||ga^
+||icu^
+||cam^
+||us.kg^
+||xx.kg^
