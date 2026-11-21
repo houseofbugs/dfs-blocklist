@@ -1,0 +1,140 @@
+# DFS Unified Blocklist
+
+Unified, auto-updating DNS and firewall blocklists built for **AdGuard Home** and **UniFi Dream Machine / Cloud Gateway (UDM / UDM-Pro / UDM-SE / UCG)** deployments.
+
+Every **12 hours** (`0 */12 * * *` UTC) and on every push to `main`, [GitHub Actions](.github/workflows/compile.yml) automatically fetches upstream threat & ad feeds, deduplicates them, applies your custom blocks/allows/rewrites, and publishes ready-to-use files to the `dist` branch—completely hands-off.
+
+---
+
+## Live Blocklist URLs
+
+| Platform | List Name | URL | Notes |
+| --- | --- | --- | --- |
+| **AdGuard Home** | Unified Blocklist (Full) | `https://raw.githubusercontent.com/houseofbugs/dfs-blocklist/dist/blocklist.txt` | Adblock syntax (`\|\|domain^`, `$dnsrewrite`, `$important`), ~750k+ rules including unauthorized LOLRMM RMMs |
+| **UniFi UDM / UCG** | External Domain List (Lite) | `https://raw.githubusercontent.com/houseofbugs/dfs-blocklist/dist/udm-domains.txt` | Plain domains (1/line), unauthorized LOLRMM RMMs + malware/phishing + custom blocks, capped at **9,500** for UDM limits |
+| **UniFi UDM / UCG** | External IP/CIDR List (Lite) | `https://raw.githubusercontent.com/houseofbugs/dfs-blocklist/dist/udm-ips.txt` | Plain IPv4 & CIDRs (1/line), unauthorized LOLRMM IPs + Spamhaus DROP + HaGeZi TIF + custom IPs, capped at **9,500** for UDM limits |
+| **Appliances / Full** | Plain Domains (Full) | `https://raw.githubusercontent.com/houseofbugs/dfs-blocklist/dist/udm-domains-full.txt` | Uncapped plain-domain list extracted from the full compiled list |
+| **Appliances / Full** | Plain IPs/CIDRs (Full) | `https://raw.githubusercontent.com/houseofbugs/dfs-blocklist/dist/udm-ips-full.txt` | Uncapped plain IP/CIDR threat intelligence list |
+| **Standalone LOLRMM** | Unauthorized RMMs (AdGuard) | `https://raw.githubusercontent.com/houseofbugs/dfs-blocklist/dist/lolrmm-adguard.txt` | Standalone Adblock-format LOLRMM feed (excluding `sanctioned-rmm.txt`) |
+| **Standalone LOLRMM** | Unauthorized RMM Domains (UDM) | `https://raw.githubusercontent.com/houseofbugs/dfs-blocklist/dist/lolrmm-udm-domains.txt` | Standalone plain-domain LOLRMM feed (excluding `sanctioned-rmm.txt`) |
+| **Standalone LOLRMM** | Unauthorized RMM IPs (UDM) | `https://raw.githubusercontent.com/houseofbugs/dfs-blocklist/dist/lolrmm-udm-ips.txt` | Standalone plain-IP LOLRMM feed (excluding `sanctioned-rmm.txt`) |
+
+---
+
+## Setup: AdGuard Home
+
+1. Open your AdGuard Home web dashboard.
+2. Go to **Filters** -> **DNS blocklists**.
+3. Click **Add blocklist** -> **Add a custom list**.
+4. Enter a name (e.g., `DFS Unified Blocklist`) and paste:
+   ```text
+   https://raw.githubusercontent.com/houseofbugs/dfs-blocklist/dist/blocklist.txt
+   ```
+5. Click **Save**. AdGuard Home downloads the list immediately and auto-updates on its configured filter update interval (default: every 24 hours; customizable under **Settings** -> **General settings** -> **Filters update interval**).
+
+---
+
+## Setup: UniFi UDM / UDM-Pro / UDM-SE / UCG Gateways
+
+UniFi gateways running **UniFi Network 11.0+ / UniFi OS 6.0+** support **External Network Lists** that auto-update from a URL, paired with UniFi's built-in **Ad Blocking**.
+
+> **Why separate UDM URLs?** UniFi External Lists require plain one-entry-per-line text (no Adblock `||` or `^` syntax) and enforce ~10,000-entry `ipset`/provisioning limits per list. Using `udm-domains.txt` and `udm-ips.txt` keeps your gateways fast and prevents provisioning errors.
+
+### 1. Enable Native UniFi Ad Blocking (Ads & Trackers)
+1. In the UniFi Network dashboard, go to **Settings** -> **CyberSecure** -> **Content Filter** *(or **Security** -> **Traffic & Firewall** on older layouts)*.
+2. Enable **Ad Blocking** on your client LAN/VLAN networks (using UniFi's built-in ad database).
+3. *(Optional)* Enable **DNS Shield** / Encrypted DNS so client devices cannot easily bypass gateway DNS filtering.
+
+### 2. Add the DFS Threat Domain & IP External Lists
+1. Go to **Settings** -> **Profiles** *(or **CyberSecure** / **Objects**)* -> **External Network Lists** (Create New).
+2. Create the **Domain Threat List**:
+   - **Name:** `DFS Threat Domains`
+   - **Type:** Domain List
+   - **URL:**
+     ```text
+     https://raw.githubusercontent.com/houseofbugs/dfs-blocklist/dist/udm-domains.txt
+     ```
+   - **Auto-Update Interval:** `24 hours`
+   - Click **Save**.
+3. Create the **IP/CIDR Threat List**:
+   - **Name:** `DFS Threat IPs`
+   - **Type:** IP Address / Subnet List
+   - **URL:**
+     ```text
+     https://raw.githubusercontent.com/houseofbugs/dfs-blocklist/dist/udm-ips.txt
+     ```
+   - **Auto-Update Interval:** `24 hours`
+   - Click **Save**.
+
+### 3. Attach Both Lists to Blocking Rules
+1. Go to **Settings** -> **Security** -> **Traffic & Firewall Rules** *(or **Policy Engine**)* -> **Create Entry**.
+2. **Block Threat Domains:**
+   - **Action:** `Block`
+   - **Source:** Your internal networks/VLANs (e.g., `All Internal Networks`)
+   - **Destination:** Select the **`DFS Threat Domains`** External List
+   - Save the rule.
+3. **Block Threat IPs (Inbound & Outbound):**
+   - **Action:** `Block`
+   - **Direction / Zone:** Internal -> External (and optionally External -> Internal)
+   - **Destination (and/or Source):** Select the **`DFS Threat IPs`** External List
+   - Save the rule.
+
+*(For clients who want the full 750k+ ad/malware ruleset plus custom DNS rewrites, run AdGuard Home on a local VM/LXC/Raspberry Pi and point UniFi DHCP DNS to that AdGuard Home instance using `blocklist.txt`.)*
+
+---
+
+## Managing Global Overrides (Both AdGuard Home & UDM/UCG)
+
+Changes pushed to `main` automatically recompile **all** output files (`blocklist.txt`, `udm-domains.txt`, `udm-ips.txt`, and `-full` variants) within ~1 minute:
+
+- **Allow / whitelist a domain or IP globally (false positives):**
+  Add `@@||example.com^$important` to [`custom-allow.txt`](custom-allow.txt) and `||example.com^` to [`exclusions.txt`](exclusions.txt). Allowed domains/IPs (including all subdomains of `digitalforgesystems.com` and `dfsys.it`, plus `rustdesk.digitalforgesystems.com` and `184.18.0.169`) are stripped from both AdGuard Home and UDM lists.
+- **Sanction approved RMM tools (LOLRMM protection):**
+  Unauthorized Remote Monitoring & Management (RMM) tools from [lolrmm.io](https://lolrmm.io) are blocked automatically across both AdGuard Home and UDM/UCG lists to prevent tech-support scams and Living-Off-the-Land RMM abuse. Tools listed in [`sanctioned-rmm.txt`](sanctioned-rmm.txt) (pre-configured with **`Action1`**) are excluded from blocking and automatically whitelisted globally. Stock `rustdesk.com` and public RustDesk relays remain **blocked** while DFS's self-hosted `rustdesk.digitalforgesystems.com` (`184.18.0.169`) is explicitly allowed.
+- **Block an additional domain, IP, CIDR, or high-risk TLD globally:**
+  Add `||bad-domain.com^`, `||203.0.113.45^`, `||203.0.113.0/24^`, or disposable TLDs (such as `||zip^`, `||mov^`, `||top^`) to [`custom-block.txt`](custom-block.txt). Custom multi-label domains and IPs are prioritized at the top of `udm-domains.txt` / `udm-ips.txt` so they are never truncated by the 9,500-entry cap.
+- **Multi-layer deduplication:**
+  The build pipeline performs cross-section rule deduplication for `blocklist.txt`, two-pass parent-domain pruning for upstream UDM domains (dropping redundant subdomains when the parent domain is already blocked), and CIDR subnet-containment collapse for UDM IPs/CIDRs while preserving explicit custom rules verbatim.
+- **Map or change a hostname's IP address (AdGuard Home DNS rewrite):**
+  Add `||host.example.com^$dnsrewrite=192.168.1.50` to [`custom-rewrites.txt`](custom-rewrites.txt) (optionally scoped with `,client=192.168.1.0/24`). *(Applies to AdGuard Home `blocklist.txt`; on UDM use UniFi's local DNS Record settings.)*
+- **Quick CLI helper & Antigravity skills:**
+  Workspace skills in [`.agents/skills/`](.agents/skills/manage-hosts-and-ips/SKILL.md) include [`manage-rules.ps1`](.agents/skills/manage-hosts-and-ips/scripts/manage-rules.ps1) to add, remove, change, check, sanction RMMs, and push rules:
+  ```powershell
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".agents\skills\manage-hosts-and-ips\scripts\manage-rules.ps1" -Action block -Target "bad-domain.com" -Push
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".agents\skills\manage-hosts-and-ips\scripts\manage-rules.ps1" -Action allow -Target "legit-site.com" -Push
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".agents\skills\manage-hosts-and-ips\scripts\manage-rules.ps1" -Action rewrite -Target "nas.internal.local" -Ip "10.0.10.25" -Push
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".agents\skills\manage-hosts-and-ips\scripts\manage-rules.ps1" -Action sanction-rmm -Target "ScreenConnect" -Push
+  ```
+
+---
+
+## Included Upstream Feeds
+
+### AdGuard Home (`blocklist.txt` & `udm-domains-full.txt`)
+| Category | Feed Name | Source |
+| --- | --- | --- |
+| Custom Overrides | DFS Custom DNS Rewrites | [`custom-rewrites.txt`](custom-rewrites.txt) |
+| Custom Overrides | DFS Custom Blocklist | [`custom-block.txt`](custom-block.txt) |
+| Custom Overrides | DFS Custom Allowlist | [`custom-allow.txt`](custom-allow.txt) |
+| Ads & Trackers | AdGuard DNS Filter | `https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt` |
+| Ads & Trackers | HaGeZi Multi PRO | `https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/pro.txt` |
+| Ads & Trackers | OISD Big | `https://big.oisd.nl` |
+| Threat Intelligence | HaGeZi Threat Intelligence Feeds (Medium) | `https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/tif.medium.txt` |
+| Malware | Abuse.ch URLHaus Malicious Domains | `https://malware-filter.gitlab.io/malware-filter/urlhaus-filter-agh-online.txt` |
+| Phishing | Phishing URL Blocklist (PhishTank, OpenPhish, PhishStats) | `https://malware-filter.gitlab.io/malware-filter/phishing-filter-agh.txt` |
+| Phishing | Phishing Army Extended | `https://phishing.army/download/phishing_army_blocklist_extended.txt` |
+| Malware | DandelionSprout Anti-Malware | `https://raw.githubusercontent.com/DandelionSprout/adfilt/master/Alternate%20versions%20Anti-Malware%20List/AntiMalwareAdGuardHome.txt` |
+| Security Hardening | HaGeZi Badware Hoster | `https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/hoster.txt` |
+| Security Hardening | HaGeZi Dynamic DNS | `https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/dyndns.txt` |
+| Infostealer Prevention | HaGeZi Anti-Piracy | `https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/anti.piracy.txt` |
+| Malware | ShadowWhisperer Malware | `https://raw.githubusercontent.com/ShadowWhisperer/BlockLists/master/Lists/Malware` |
+| Scams | ShadowWhisperer Scam | `https://raw.githubusercontent.com/ShadowWhisperer/BlockLists/master/Lists/Scam` |
+| Spyware | AssoEchap Stalkerware Indicators | `https://raw.githubusercontent.com/AssoEchap/stalkerware-indicators/master/generated/hosts` |
+| Cryptojacking | NoCoin Cryptojacking Filter | `https://raw.githubusercontent.com/hoshsadiq/adblock-nocoin-list/master/hosts.txt` |
+| Unauthorized RMM | LOLRMM (`lolrmm.io`, filtered by [`sanctioned-rmm.txt`](sanctioned-rmm.txt)) | `https://lolrmm.io/api/rmm_domains.csv` |
+
+### UniFi UDM / UCG High-Confidence Feeds (`udm-domains.txt` & `udm-ips.txt`)
+| Target File | Feed Name | Source |
+| --- | --- | --- |
+| `udm-domains.txt` | DFS Custom Domains + Unauthorized LOLRMM Domains + URLHaus + Stalkerware + NoCoin + HaGeZi Hoster/DynDNS + ShadowWhisperer Scam/Malware + DandelionSprout + Phishing Filter (deduplicated & capped at 9,500) | Above LOLRMM & security/malware sources |
+| `udm-ips.txt` | DFS Custom IPs/CIDRs + Unauthorized LOLRMM IPs + Abuse.ch SSLBL C2 + Proofpoint Compromised + Spamhaus DROP + HaGeZi TIF IPs + CINSscore IPs (CIDR-collapsed & capped at 9,500) | LOLRMM, `https://sslbl.abuse.ch/blacklist/sslipblacklist.txt`, `https://rules.emergingthreats.net/blockrules/compromised-ips.txt`, `https://www.spamhaus.org/drop/drop.txt`, `https://raw.githubusercontent.com/hagezi/dns-blocklists/main/ips/tif.txt`, `https://cinsscore.com/list/ci-badguys.txt` |
